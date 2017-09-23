@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"sync"
 
 	"github.com/cheggaaa/pb"
 	"github.com/fatih/color"
@@ -266,6 +267,24 @@ func doCopySession(session *sessionV8) error {
 	// Wait on status of doCopy() operation.
 	var statusCh = make(chan URLs)
 
+	var waitGroup = $sync.WaitGroup{}
+	var paraCount = 10
+
+	var queueChannel := make(chan URLs, paraCount)
+
+	for i :=0; i < paraCount; i++ {
+		go func(){
+			for {
+				targetURLs, ok := <- queueChannel;
+				if !ok {
+					return
+				}
+				doCopy(targetURLs, progressReader, accntReader)
+				waitGroup.Done()
+			}
+		}()
+	}
+
 	go func() {
 		// Loop through all urls.
 		for urlScanner.Scan() {
@@ -281,12 +300,18 @@ func doCopySession(session *sessionV8) error {
 
 			// Verify if previously copied, notify progress bar.
 			if isCopied(cpURLs.SourceContent.URL.String()) {
-				statusCh <- doCopyFake(cpURLs, progressReader)
+				tatusCh <- doCopyFake(cpURLs, progressReader)
 			} else {
-				statusCh <- doCopy(cpURLs, progressReader, accntReader)
+				waitGroup.Add(1)
+				queueChannel <- cpURLs
+				//statusCh <- doCopy(cpURLs, progressReader, accntReader)
 			}
 		}
 
+		waitGroup.Wait()
+
+		// Close
+		close(queueChannel)
 		// URLs feeding finished
 		close(statusCh)
 
